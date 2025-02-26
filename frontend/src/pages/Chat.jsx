@@ -2,6 +2,8 @@ import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { io } from "socket.io-client";
 import Picker from "emoji-picker-react";
+import moment from "moment";
+
 
 const socket = io("http://localhost:5000");
 
@@ -68,9 +70,9 @@ const Chat = () => {
 
   const sendMessage = async () => {
     if (!message.trim() && !selectedFile) return;
-
+  
     const token = localStorage.getItem("token");
-
+  
     const formData = new FormData();
     formData.append("sender", user._id);
     formData.append("receiver", selectedUser._id);
@@ -78,7 +80,8 @@ const Chat = () => {
       formData.append("file", selectedFile);
     }
     formData.append("message", message.trim());
-
+    formData.append("timestamp", new Date().toISOString()); // Add timestamp
+  
     try {
       const response = await axios.post(
         "http://localhost:5000/api/chat/send",
@@ -90,7 +93,7 @@ const Chat = () => {
           },
         }
       );
-
+  
       socket.emit("sendMessage", response.data);
       setMessages((prev) => [...prev, response.data]);
       setMessage("");
@@ -101,6 +104,7 @@ const Chat = () => {
     }
   };
 
+  
   const handleEmojiClick = (emojiObject) => {
     setMessage((prev) => prev + emojiObject.emoji);
     setShowEmojiPicker(false);
@@ -114,6 +118,26 @@ const Chat = () => {
   const removeSelectedFile = () => {
     setSelectedFile(null);
   };
+  
+
+  // Function to format date headers
+const formatDate = (date) => {
+  const today = moment().startOf("day");
+  const messageDate = moment(date).startOf("day");
+
+  if (messageDate.isSame(today, "day")) return "Today";
+  if (messageDate.isSame(today.subtract(1, "day"), "day")) return "Yesterday";
+  return messageDate.format("dddd, MMM D");
+};
+
+// Group messages by day
+const groupedMessages = messages.reduce((acc, msg) => {
+  const dateKey = formatDate(msg.timestamp);
+  if (!acc[dateKey]) acc[dateKey] = [];
+  acc[dateKey].push(msg);
+  return acc;
+}, {});
+
 
   return (
     <div className="flex h-screen bg-gray-100">
@@ -168,46 +192,53 @@ const Chat = () => {
       </h2>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto bg-gray-100 p-3 rounded-lg">
-        {messages.map((msg, index) => (
-          <div
-            key={index}
-            className={`p-2 my-1 rounded-lg ${
-              msg.sender === user._id
-                ? "bg-slate-300 text-white self-end"
-                : "bg-neutral-300 text-black self-start"
-            }`}
+      <div className="flex-1 overflow-y-auto bg-gray-100 p-3 rounded-lg flex flex-col">
+  {Object.entries(groupedMessages).map(([date, msgs], index) => (
+    <div key={index}>
+      <div className="text-center text-gray-500 font-semibold my-2">{date}</div>
+      {msgs.map((msg, idx) => (
+  <div
+    key={idx}
+    className={`p-2 my-1 rounded-lg max-w-[30%] relative ${
+      msg.sender === user._id
+        ? "bg-slate-300 text-white ml-auto"
+        : "bg-neutral-300 text-black mr-auto"
+    }`}
+  >
+    <strong>{msg.sender === user._id ? "You" : selectedUser.name}</strong>
+    <br />
+    {msg.message}
+    {msg.file && (
+      <div className="mt-2">
+        {/\.(jpeg|jpg|png|gif)$/i.test(msg.file) ? (
+          <img
+            src={msg.file}
+            alt="Sent file"
+            className="max-w-[200px] max-h-[200px] rounded-lg"
+          />
+        ) : (
+          <a
+            href={msg.file}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-500 underline"
           >
-            <strong>
-              {msg.sender === user._id ? "You" : selectedUser.name}:
-            </strong>
-            <br />
-            {msg.message}
-            {msg.file && (
-              <div className="mt-2">
-                {/\.(jpeg|jpg|png|gif)$/i.test(msg.file) ? (
-                  <img
-                    src={msg.file}
-                    alt="Sent file"
-                    className="max-w-[200px] max-h-[200px] rounded-lg"
-                  />
-                ) : (
-                  <a
-                    href={msg.file}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-500 underline"
-                  >
-                    📎 View File
-                  </a>
-                )}
-              </div>
-            )}
-
-
-          </div>
-        ))}
+            📎 View File
+          </a>
+        )}
       </div>
+    )}
+    {/* Correct timestamp position */}
+    <span className="block text-right text-xs text-gray-600 mt-1">
+      {msg.timestamp ? moment(msg.timestamp).format("hh:mm A") : "Time not available"}
+    </span>
+  </div>
+))}
+
+    </div>
+  ))}
+</div>
+
 
       {/* Emoji Picker (Now positioned in chat area) */}
       {showEmojiPicker && (

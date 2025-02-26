@@ -31,20 +31,14 @@ const upload = multer({ storage });
 router.post("/send", authMiddleware, upload.single("file"), async (req, res) => {
   console.log("Received File:", req.file); // Debugging log
   try {
-    const { sender, receiver, message } = req.body;
+    const { sender, receiver, message, timestamp } = req.body; // Accept timestamp from frontend
     const file = req.file ? `http://localhost:5000/uploads/${req.file.filename}` : null;
 
     if (!sender || !receiver) {
       return res.status(400).json({ message: "Sender and receiver are required." });
     }
 
-    // Check if the message was already sent (to prevent duplicates)
-    const existingMessage = await Message.findOne({ sender, receiver, message, file });
-    if (existingMessage) {
-      return res.status(409).json({ message: "Duplicate message detected." });
-    }
-
-    const newMessage = new Message({ sender, receiver, message, file });
+    const newMessage = new Message({ sender, receiver, message, file, timestamp: timestamp || new Date() });
     await newMessage.save();
 
     res.status(201).json(newMessage);
@@ -55,12 +49,12 @@ router.post("/send", authMiddleware, upload.single("file"), async (req, res) => 
 });
 
 
+
 // Get Messages Between Two Users
 router.get("/:senderId/:receiverId", authMiddleware, async (req, res) => {
   try {
     const { senderId, receiverId } = req.params;
 
-    // Validate MongoDB ObjectIds
     if (!mongoose.Types.ObjectId.isValid(senderId) || !mongoose.Types.ObjectId.isValid(receiverId)) {
       return res.status(400).json({ message: "Invalid sender or receiver ID." });
     }
@@ -70,7 +64,7 @@ router.get("/:senderId/:receiverId", authMiddleware, async (req, res) => {
         { sender: senderId, receiver: receiverId },
         { sender: receiverId, receiver: senderId },
       ],
-    }).sort({ createdAt: 1 });
+    }).sort({ timestamp: 1 }); // Ensure messages are sorted chronologically
 
     res.json(messages);
   } catch (error) {
@@ -78,5 +72,6 @@ router.get("/:senderId/:receiverId", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Error fetching messages", error });
   }
 });
+
 
 module.exports = router;

@@ -105,6 +105,7 @@ io.on("connection", (socket) => {
       receiver: message.receiver,
       message: message.message || "",
       file: message.file ? message.file : null,
+      timestamp: message.timestamp || new Date(), // Ensure timestamp is stored
     });
 
     await newMessage.save();

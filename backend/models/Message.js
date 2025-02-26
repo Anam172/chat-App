@@ -5,6 +5,9 @@ const MessageSchema = new mongoose.Schema({
   receiver: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   message: { type: String, required: false }, 
   file: { type: String },
-}, { timestamps: true });
+  timestamp: { type: Date, default: Date.now } // Ensure timestamp is stored
+}, 
+{ timestamps: true }
+);
 
 module.exports = mongoose.model("Message", MessageSchema);

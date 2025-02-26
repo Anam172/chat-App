@@ -1,5 +1,5 @@
 const User = require("../models/User");
-const avatars = require("../models/Avatars"); // Fixed import
+const avatars = require("../models/Avatars"); 
 
 // Save user avatar
 const saveAvatar = async (req, res) => {
@@ -31,7 +31,7 @@ const getAllUsers = async (req, res) => {
   }
 };
 
-// Fetch all avatars (fixed)
+// Fetch all avatars
 const getAllAvatars = (req, res) => {
   try {
     res.status(200).json(avatars); // Directly return avatars array
