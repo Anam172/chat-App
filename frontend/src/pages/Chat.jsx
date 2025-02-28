@@ -5,6 +5,7 @@ import Picker from "emoji-picker-react";
 import moment from "moment";
 
 
+
 const socket = io("http://localhost:5000");
 
 const Chat = () => {
@@ -149,14 +150,14 @@ const groupedMessages = messages.reduce((acc, msg) => {
             <li
               key={usr._id || index}
               className={`flex items-center gap-3 p-2 rounded-md cursor-pointer transition duration-200 ${
-                selectedUser?._id === usr._id ? "bg-gray-50" : "hover:bg-gray-200"
+                selectedUser?._id === usr._id ? "bg-gray-100" : "hover:bg-gray-200"
               }`}
               onClick={() => setSelectedUser(usr)}
             >
               <img
                 src={usr.avatar || "/avatars/defaultUser.jpg"}
                 alt={usr.name}
-                className="w-10 h-10 rounded-full border-2 border-gray-100"
+                className="w-10 h-10 rounded-full border-2 border-zinc-600"
               />
               <span className="text-lg">
                 {usr.name} {usr._id === user?._id ? "(You)" : ""}
@@ -171,7 +172,7 @@ const groupedMessages = messages.reduce((acc, msg) => {
             <img
               src={user.avatar || "/avatars/defaultUser.jpg"}
               alt="Your Avatar"
-              className="w-12 h-12 rounded-full border-2 border-gray-400"
+              className="w-12 h-12 rounded-full border-2 border-zinc-600"
             />
             <span className="font-semibold text-lg">{user.name} (You)</span>
           </div>
@@ -186,7 +187,7 @@ const groupedMessages = messages.reduce((acc, msg) => {
         <img
           src={selectedUser.avatar || "/avatars/defaultUser.jpg"}
           alt={selectedUser.name}
-          className="w-10 h-10 rounded-full"
+          className="w-10 h-10 rounded-full border-2 border-zinc-400"
         />
         Chat with {selectedUser.name}
       </h2>
@@ -252,32 +253,33 @@ const groupedMessages = messages.reduce((acc, msg) => {
 
       {/* Chat Input & Controls */}
       <div className="flex items-center gap-2 p-2 border-t mt-3">
-        {/* Emoji Button */}
-        <button
+        {/* File Upload */}
+        <input type="file" onChange={handleFileChange} className="hidden" id="file-input" />
+        <label htmlFor="file-input" className="p-2 text-xl cursor-pointer">
+          ➕
+        </label>
+
+        {/* File Preview */}
+        {selectedFile && (
+          <div className="absolute bottom-14 left-10 bg-gray-200 p-2 rounded-lg flex items-center gap-2 shadow-md w-28">
+            {selectedFile.type.startsWith("image/") ? (
+              <img src={URL.createObjectURL(selectedFile)} alt="Preview" className="w-10 h-10 rounded-md" />
+            ) : (
+              <span className="text-sm text-gray-800">{selectedFile.name}</span>
+            )}
+            <button onClick={removeSelectedFile} className="text-red-700 font-bold pl-4">
+              ✖
+            </button>
+          </div>
+        )}
+
+         {/* Emoji Button */}
+         <button
           onClick={() => setShowEmojiPicker(!showEmojiPicker)}
           className="p-2 text-xl"
         >
           😊
         </button>
-{/* File Upload */}
-  <input type="file" onChange={handleFileChange} className="hidden" id="file-input" />
-  <label htmlFor="file-input" className="p-2 text-xl cursor-pointer">
-    ➕
-  </label>
-
-  {/* File Preview */}
-  {selectedFile && (
-    <div className="absolute bottom-14 left-10 bg-gray-200 p-2 rounded-lg flex items-center gap-2 shadow-md w-28">
-      {selectedFile.type.startsWith("image/") ? (
-        <img src={URL.createObjectURL(selectedFile)} alt="Preview" className="w-10 h-10 rounded-md" />
-      ) : (
-        <span className="text-sm text-gray-800">{selectedFile.name}</span>
-      )}
-      <button onClick={removeSelectedFile} className="text-red-500 font-bold pl-4">
-        ✖
-      </button>
-    </div>
-  )}
 
         {/* Message Input */}
         <input
@@ -299,6 +301,8 @@ const groupedMessages = messages.reduce((acc, msg) => {
     <div className="flex flex-col items-center justify-center h-full">
       <h2 className="text-3xl font-bold">Welcome, {user?.name}!</h2>
       <p>Select a user to start chatting.</p>
+      <img src="/Message.gif" 
+       alt="Welcome Gif" />
     </div>
   )}
 </div>

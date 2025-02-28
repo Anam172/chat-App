@@ -29,7 +29,7 @@ const Avatar = () => {
         avatarSrc: avatar.src,
       });
 
-      // ✅ Update user object in localStorage immediately
+      // Update user object in localStorage immediately
       const updatedUser = { ...user, avatar: avatar.src };
       localStorage.setItem("user", JSON.stringify(updatedUser));
 
