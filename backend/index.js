@@ -16,6 +16,7 @@ const Message = require("./models/Message");
 dotenv.config();
 const app = express();
 
+
 // Ensure 'uploads' folder exists
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) {
@@ -74,6 +75,8 @@ const io = new Server(server, {
   },
 });
 
+global.io = io;  
+
 const onlineUsers = new Map();
 
 io.on("connection", (socket) => {
@@ -83,9 +86,18 @@ io.on("connection", (socket) => {
     console.log("Message received:", message);
 
     if (!message.sender || !message.receiver) {
-      console.log("❌ Missing sender or receiver ID in message:", message);
+      console.log(" Missing sender or receiver ID in message:", message);
       return;
     }
+    socket.on("typing", ({ senderId, receiverId }) => {
+      socket.to(receiverId).emit("userTyping", { senderId });
+    });
+    
+    socket.on("stopTyping", ({ senderId, receiverId }) => {
+      socket.to(receiverId).emit("userStoppedTyping", { senderId });
+    });
+    
+    
 
     // Check if the message was already stored
     const existingMessage = await Message.findOne({
@@ -105,13 +117,25 @@ io.on("connection", (socket) => {
       receiver: message.receiver,
       message: message.message || "",
       file: message.file ? message.file : null,
-      timestamp: message.timestamp || new Date(), // Ensure timestamp is stored
+      timestamp: message.timestamp || new Date(),
+      status: "sent",
     });
 
     await newMessage.save();
-    io.emit("receiveMessage", newMessage); // Emit to all users
+    io.emit("receiveMessage", newMessage); 
   });
-
+  
+  socket.on("messageRead", async ({ messageId, senderId }) => {
+    try {
+      await MessageModel.findByIdAndUpdate(messageId, { status: "read" });
+      
+      // Notify sender that the message is read
+      io.to(senderId).emit("messageReadUpdate", { messageId });
+    } catch (error) {
+      console.error("Error updating message status:", error);
+    }
+  });
+  
   socket.on("disconnect", () => {
     console.log("User disconnected");
   });

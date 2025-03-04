@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import axios from "axios";
 import { io } from "socket.io-client";
 import Picker from "emoji-picker-react";
 import moment from "moment";
+import { FaPaperclip, FaTimes, FaPlus, FaCheck, FaCheckDouble } from "react-icons/fa";
 
 
 
@@ -16,10 +17,20 @@ const Chat = () => {
   const [message, setMessage] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [isTyping, setIsTyping] = useState(false);
+  const fileInputRef = useRef(null);
+  const typingTimeout = useRef(null);
+
+
+
 
   useEffect(() => {
     const storedUser = JSON.parse(localStorage.getItem("user"));
     const token = localStorage.getItem("token");
+    if (!token) {
+      console.error("No token found in localStorage");
+    }
+
 
     if (storedUser) {
       setUser(storedUser);
@@ -48,32 +59,41 @@ const Chat = () => {
   }, []);
 
   useEffect(() => {
-    if (selectedUser && user) {
-      axios
-        .get(`http://localhost:5000/api/chat/${user._id}/${selectedUser._id}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-        })
-        .then((res) => setMessages(res.data))
-        .catch((err) => console.error("Error fetching chat history:", err));
+    if (!user || !selectedUser) return;
+    const token = localStorage.getItem("token");
+    if (!token) {
+      console.error("No token found, authentication required.");
+      return;
     }
+    
+    axios.get(`http://localhost:5000/api/chat/${user._id}/${selectedUser._id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    .then((res) => setMessages(res.data))
+    .catch((err) => console.error("Error fetching chat history:", err));
   }, [selectedUser, user]);
-
+  
+  
+  
   useEffect(() => {
     socket.on("receiveMessage", (newMessage) => {
+      console.log("Received Message:", newMessage);
       setMessages((prev) => [...prev, newMessage]);
     });
   
     return () => {
       socket.off("receiveMessage");
     };
-  }, []);  
+  }, []);
+  
   
 
-  const sendMessage = async () => {
+  const sendMessage = useCallback(async () => {
     if (!message.trim() && !selectedFile) return;
   
-    const token = localStorage.getItem("token");
+    console.log("Sending Message:", { message, selectedFile });
   
+    const token = localStorage.getItem("token");
     const formData = new FormData();
     formData.append("sender", user._id);
     formData.append("receiver", selectedUser._id);
@@ -81,35 +101,73 @@ const Chat = () => {
       formData.append("file", selectedFile);
     }
     formData.append("message", message.trim());
-    formData.append("timestamp", new Date().toISOString()); // Add timestamp
+    formData.append("timestamp", new Date().toISOString());
   
     try {
-      const response = await axios.post(
-        "http://localhost:5000/api/chat/send",
-        formData,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "multipart/form-data",
-          },
-        }
-      );
+      const response = await axios.post("http://localhost:5000/api/chat/send", formData, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "multipart/form-data",
+        },
+      });
   
+      console.log("Message Sent:", response.data);
+      
       socket.emit("sendMessage", response.data);
       setMessages((prev) => [...prev, response.data]);
       setMessage("");
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
       setSelectedFile(null);
-      document.getElementById("file-input").value = "";
+      
     } catch (err) {
       console.error("Error sending message:", err);
     }
-  };
-
+  }, [message, selectedFile, user, selectedUser]);
+  
+  useEffect(() => {
+    socket.on("userTyping", ({ senderId }) => {
+      if (selectedUser?._id === senderId) {
+        setIsTyping(true);
+      }
+    });
+  
+    socket.on("userStoppedTyping", ({ senderId }) => {
+      if (selectedUser?._id === senderId) {
+        setIsTyping(false);
+      }
+    });
+  
+    return () => {
+      socket.off("userTyping");
+      socket.off("userStoppedTyping");
+    };
+  }, [selectedUser]);
   
   const handleEmojiClick = (emojiObject) => {
     setMessage((prev) => prev + emojiObject.emoji);
     setShowEmojiPicker(false);
   };
+
+  const handleTyping = useCallback(() => {
+    if (!selectedUser) return;
+  
+    console.log("Typing event sent to", selectedUser._id);
+    socket.emit("typing", { senderId: user._id, receiverId: selectedUser._id });
+  
+    // Clear previous timeout if exists
+    if (typingTimeout.current) clearTimeout(typingTimeout.current);
+  
+    // Set new timeout to stop typing event after 2 seconds
+    typingTimeout.current = setTimeout(() => {
+      console.log("Stopped typing event sent to", selectedUser._id);
+      socket.emit("stopTyping", { senderId: user._id, receiverId: selectedUser._id });
+    }, 2000);
+  }, [user, selectedUser]);
+  
+  
+  
   
   const handleFileChange = (e) => {
     const file = e.target.files[0];
@@ -118,26 +176,72 @@ const Chat = () => {
   
   const removeSelectedFile = () => {
     setSelectedFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
   
+  useEffect(() => {
+    if (!selectedUser || !user) return;
+  
+    const token = localStorage.getItem("token");
+    axios
+      .get(`http://localhost:5000/api/chat/${user._id}/${selectedUser._id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .then((res) => {
+        setMessages(res.data);
+  
+        // Mark unread messages as read
+        res.data.forEach((msg) => {
+          if (msg.receiver === user._id && msg.status !== "read") {
+            socket.emit("messageRead", { messageId: msg._id, senderId: msg.sender });
+  
+            axios.post(
+              "http://localhost:5000/api/chat/markAsRead",
+              { messageId: msg._id },
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+          }
+        });
+      })
+      .catch((err) => console.error("Error fetching chat history:", err));
+  }, [selectedUser, user]);
+  
 
-  // Function to format date headers
-const formatDate = (date) => {
-  const today = moment().startOf("day");
-  const messageDate = moment(date).startOf("day");
-
-  if (messageDate.isSame(today, "day")) return "Today";
-  if (messageDate.isSame(today.subtract(1, "day"), "day")) return "Yesterday";
-  return messageDate.format("dddd, MMM D");
-};
+  useEffect(() => {
+    socket.on("updateMessageStatus", ({ messageId, status }) => {
+      setMessages((prevMessages) =>
+        prevMessages.map((msg) =>
+          msg._id === messageId ? { ...msg, status } : msg
+        )
+      );
+    });
+  
+    return () => {
+      socket.off("updateMessageStatus");
+    };
+  }, []);
+  
 
 // Group messages by day
-const groupedMessages = messages.reduce((acc, msg) => {
-  const dateKey = formatDate(msg.timestamp);
-  if (!acc[dateKey]) acc[dateKey] = [];
-  acc[dateKey].push(msg);
-  return acc;
-}, {});
+const groupedMessages = useMemo(() => {
+  const formatDate = (date) => {
+    const today = moment().startOf("day");
+    const messageDate = moment(date).startOf("day");
+
+    if (messageDate.isSame(today, "day")) return "Today";
+    if (messageDate.isSame(today.subtract(1, "day"), "day")) return "Yesterday";
+    return messageDate.format("dddd, MMM D");
+  };
+
+  return messages.reduce((acc, msg) => {
+    const dateKey = formatDate(msg.timestamp);
+    if (!acc[dateKey]) acc[dateKey] = [];
+    acc[dateKey].push(msg);
+    return acc;
+  }, {});
+}, [messages]);
 
 
   return (
@@ -198,47 +302,62 @@ const groupedMessages = messages.reduce((acc, msg) => {
     <div key={index}>
       <div className="text-center text-gray-500 font-semibold my-2">{date}</div>
       {msgs.map((msg, idx) => (
-  <div
-    key={idx}
-    className={`p-2 my-1 rounded-lg max-w-[30%] relative ${
-      msg.sender === user._id
-        ? "bg-slate-300 text-white ml-auto"
-        : "bg-neutral-300 text-black mr-auto"
-    }`}
-  >
-    <strong>{msg.sender === user._id ? "You" : selectedUser.name}</strong>
-    <br />
-    {msg.message}
-    {msg.file && (
-      <div className="mt-2">
-        {/\.(jpeg|jpg|png|gif)$/i.test(msg.file) ? (
-          <img
-            src={msg.file}
-            alt="Sent file"
-            className="max-w-[200px] max-h-[200px] rounded-lg"
-          />
-        ) : (
-          <a
-            href={msg.file}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-500 underline"
-          >
-            📎 View File
-          </a>
-        )}
-      </div>
-    )}
-    {/* Correct timestamp position */}
-    <span className="block text-right text-xs text-gray-600 mt-1">
-      {msg.timestamp ? moment(msg.timestamp).format("hh:mm A") : "Time not available"}
-    </span>
-  </div>
-))}
+              <div
+                key={idx}
+                className={`p-2 my-1 rounded-lg max-w-[30%] relative ${
+                  msg.sender === user._id
+                    ? "bg-slate-300 text-white ml-auto"
+                    : "bg-neutral-300 text-black mr-auto"
+                }`}
+              >
+                <strong>{msg.sender === user._id ? "You" : selectedUser.name}</strong>
+                <br />
+                {msg.message}
+                {msg.file && (
+                  <div className="mt-2">
+                    {/\.(jpeg|jpg|png|gif)$/i.test(msg.file) ? (
+                      <img
+                        src={msg.file}
+                        alt="Sent file"
+                        className="max-w-[200px] max-h-[200px] rounded-lg"
+                      />
+                    ) : (
+                      <a
+                        href={msg.file}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-zinc-500 underline"
+                      >
+                        <FaPaperclip className="mr-1 text-black" />View File
+                      </a>
+                    )}
+                  </div>
+                )}
+                {/* Correct timestamp position */}
+                <span className="flex flex-row justify-end items-center text-xs text-gray-600 mt-1">
+                  {msg.timestamp ? moment(msg.timestamp).format("hh:mm A") : "Time not available"}
 
-    </div>
-  ))}
-</div>
+                  {msg.sender === user._id && (
+                    <span className="ml-2 flex items-center">
+                      {msg.status === "read" ? (
+                        <FaCheckDouble className="text-blue-600" />
+                      ) : msg.status === "delivered" ? (
+                        <FaCheckDouble className="text-gray-600" />
+                      ) : (
+                        <FaCheck className="text-gray-600" />
+                      )}
+                    </span>
+                  )}
+                </span>
+              </div>
+            ))}
+               
+          {/* Typing Indicator */}
+          {isTyping && <p className="text-gray-500 italic mt-2">Typing...</p>}
+            </div>
+          ))}
+
+          </div>
 
 
       {/* Emoji Picker (Now positioned in chat area) */}
@@ -254,9 +373,9 @@ const groupedMessages = messages.reduce((acc, msg) => {
       {/* Chat Input & Controls */}
       <div className="flex items-center gap-2 p-2 border-t mt-3">
         {/* File Upload */}
-        <input type="file" onChange={handleFileChange} className="hidden" id="file-input" />
+        <input type="file" onChange={handleFileChange} ref={fileInputRef} className="hidden" id="file-input" />
         <label htmlFor="file-input" className="p-2 text-xl cursor-pointer">
-          ➕
+        <FaPlus className="mr-1" />
         </label>
 
         {/* File Preview */}
@@ -268,7 +387,7 @@ const groupedMessages = messages.reduce((acc, msg) => {
               <span className="text-sm text-gray-800">{selectedFile.name}</span>
             )}
             <button onClick={removeSelectedFile} className="text-red-700 font-bold pl-4">
-              ✖
+            <FaTimes className="mr-1" />
             </button>
           </div>
         )}
@@ -285,7 +404,10 @@ const groupedMessages = messages.reduce((acc, msg) => {
         <input
           type="text"
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => { setMessage(e.target.value)
+          handleTyping();
+          }
+         }
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
           className="flex-1 p-2 border rounded-lg"
           placeholder="Type a message..."

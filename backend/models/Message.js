@@ -5,7 +5,8 @@ const MessageSchema = new mongoose.Schema({
   receiver: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   message: { type: String, required: false }, 
   file: { type: String },
-  timestamp: { type: Date, default: Date.now } // Ensure timestamp is stored
+  status: { type: String, enum: ["sent", "delivered", "read"], default: "sent" },
+  timestamp: { type: Date, default: Date.now } 
 }, 
 { timestamps: true }
 );

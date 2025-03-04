@@ -38,7 +38,8 @@ router.post("/send", authMiddleware, upload.single("file"), async (req, res) => 
       return res.status(400).json({ message: "Sender and receiver are required." });
     }
 
-    const newMessage = new Message({ sender, receiver, message, file, timestamp: timestamp || new Date() });
+    const newMessage = new Message({ 
+      sender, receiver, message, file, timestamp: timestamp || new Date(), status: "sent" });
     await newMessage.save();
 
     res.status(201).json(newMessage);
@@ -48,6 +49,29 @@ router.post("/send", authMiddleware, upload.single("file"), async (req, res) => 
   }
 });
 
+// Mark a Message as Read
+// Mark message as read when the receiver views it
+router.post("/markAsRead", authMiddleware, async (req, res) => {
+  try {
+    const { messageId } = req.body;
+
+    const message = await Message.findByIdAndUpdate(
+      messageId,
+      { status: "read" },
+      { new: true }
+    );
+
+    if (!message) return res.status(404).json({ message: "Message not found" });
+
+    // Notify sender that the message has been read
+    io.emit("updateMessageStatus", { messageId: message._id, status: "read" });
+
+    res.json({ success: true, message });
+  } catch (error) {
+    console.error("Error updating message status:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 
 // Get Messages Between Two Users
@@ -64,7 +88,24 @@ router.get("/:senderId/:receiverId", authMiddleware, async (req, res) => {
         { sender: senderId, receiver: receiverId },
         { sender: receiverId, receiver: senderId },
       ],
-    }).sort({ timestamp: 1 }); // Ensure messages are sorted chronologically
+    }).sort({ timestamp: 1 }); 
+
+    // Update unread messages to "delivered"
+    await Message.updateMany(
+      {
+        sender: receiverId,  // Messages sent by the receiver (which the sender now sees)
+        receiver: senderId,  // The current user who is viewing them
+        status: "sent",
+      },
+      { $set: { status: "delivered" } }
+    );
+    
+    // Notify sender that their messages were delivered
+    messages.forEach((msg) => {
+      if (msg.status === "sent") {
+        global.io.emit("updateMessageStatus", { messageId: msg._id, status: "delivered" });
+      }
+    });
 
     res.json(messages);
   } catch (error) {
