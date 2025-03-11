@@ -11,30 +11,13 @@ const fs = require("fs");
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const chatRoutes = require("./routes/chatRoutes");
+const groupRoutes = require("./routes/groupRoutes");
 const Message = require("./models/Message");
+const User = require("./models/User");
 
 dotenv.config();
 const app = express();
 
-
-// Ensure 'uploads' folder exists
-const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir);
-  console.log("Uploads folder created successfully.");
-}
-
-// Set up file storage for uploaded files
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
-  },
-});
-
-const upload = multer({ storage });
 
 const allowedOrigins = ["http://localhost:5173"];
 
@@ -64,6 +47,7 @@ mongoose
 app.use("/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/groups", groupRoutes);
 
 
 // Socket.io Setup
@@ -77,70 +61,161 @@ const io = new Server(server, {
 
 global.io = io;  
 
-const onlineUsers = new Map();
+const users = new Map();
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
+  // Handle user connection
+  socket.on("userConnected", async (userId) => {
+    if (!userId) return;
+
+    users.set(userId, socket.id);
+    socket.userId = userId;
+
+    // Update user online status in the database
+    await User.findByIdAndUpdate(userId, { isOnline: true });
+
+    updateAllUserStatuses();
+  });
+
+  // Handle user disconnection
+  socket.on("disconnect", async () => {
+    if (socket.userId) {
+      users.delete(socket.userId);
+      const lastSeenTime = new Date();
+
+      // Update last seen and mark user as offline
+      await User.findByIdAndUpdate(socket.userId, { 
+        isOnline: false, 
+        lastSeen: lastSeenTime 
+      });
+
+      //Emit updated user statuses
+      updateAllUserStatuses();
+    }
+    console.log("User disconnected:", socket.id);
+  });
+
+
+// Emit Updated User Status to All Clients
+const updateAllUserStatuses = async () => {
+  try {
+    const allUsers = await User.find({}, "isOnline lastSeen");
+    io.emit("update-user-status", allUsers);
+  } catch (error) {
+    console.error("Error fetching user statuses:", error);
+  }
+};
+
+  // Listen for typing events
+  socket.on("typing", ({ senderId, receiverId }) => {
+    socket.to(receiverId).emit("userTyping", { senderId });
+  });
+
+  socket.on("stopTyping", ({ senderId, receiverId }) => {
+    socket.to(receiverId).emit("userStoppedTyping", { senderId });
+  });
+
+  // Handle individual chat messages
   socket.on("sendMessage", async (message) => {
-    console.log("Message received:", message);
-
+    console.log("Received message in backend:", message);
+  
     if (!message.sender || !message.receiver) {
-      console.log(" Missing sender or receiver ID in message:", message);
+      console.error("Missing sender or receiver ID:", message);
       return;
     }
-    socket.on("typing", ({ senderId, receiverId }) => {
-      socket.to(receiverId).emit("userTyping", { senderId });
-    });
-    
-    socket.on("stopTyping", ({ senderId, receiverId }) => {
-      socket.to(receiverId).emit("userStoppedTyping", { senderId });
-    });
-    
-    
-
-    // Check if the message was already stored
-    const existingMessage = await Message.findOne({
-      sender: message.sender,
-      receiver: message.receiver,
-      message: message.message || "",
-      file: message.file ? message.file : null,
-    });
-
-    if (existingMessage) {
-      console.log("Duplicate message detected. Skipping save.");
-      return;
+  
+    try {
+      // Convert sender & receiver to ObjectId correctly
+      const senderId = new mongoose.Types.ObjectId(message.sender);
+      const receiverId = new mongoose.Types.ObjectId(message.receiver);
+  
+      const newMessage = new Message({
+        sender: senderId,
+        receiver: receiverId,
+        message: message.message || "",
+        file: message.file || null,
+        timestamp: message.timestamp || new Date(),
+        status: "sent",
+      });
+  
+      await newMessage.save();
+  
+      console.log("Emitting message to sender & receiver:", newMessage);
+  
+      io.to([users.get(senderId.toString()), users.get(receiverId.toString())])
+        .emit("receiveMessage", newMessage);
+  
+    } catch (error) {
+      console.error("Error processing message:", error);
     }
-
-    const newMessage = new Message({
-      sender: message.sender,
-      receiver: message.receiver,
-      message: message.message || "",
-      file: message.file ? message.file : null,
-      timestamp: message.timestamp || new Date(),
-      status: "sent",
-    });
-
-    await newMessage.save();
-    io.emit("receiveMessage", newMessage); 
   });
   
-  socket.on("messageRead", async ({ messageId, senderId }) => {
+
+  // Mark messages as read
+  socket.on("messageRead", async ({ messageId }) => {
     try {
-      await MessageModel.findByIdAndUpdate(messageId, { status: "read" });
-      
-      // Notify sender that the message is read
-      io.to(senderId).emit("messageReadUpdate", { messageId });
+      const updatedMessage = await Message.findByIdAndUpdate(
+        messageId,
+        { status: "read" },
+        { new: true }
+      );
+
+      if (!updatedMessage) {
+        console.error("Message not found for read update:", messageId);
+        return;
+      }
+
+      // Emit read status update to the sender
+      io.to(users.get(updatedMessage.sender)).emit("updateMessageStatus", {
+        messageId: updatedMessage._id,
+        status: "read",
+      });
     } catch (error) {
       console.error("Error updating message status:", error);
     }
   });
-  
-  socket.on("disconnect", () => {
-    console.log("User disconnected");
-  });
-});
 
+  // Handle joining group rooms
+  socket.on("joinGroup", async (groupId) => {
+    if (!groupId) return;
+    
+    socket.join(groupId);
+    console.log(`User ${socket.id} joined Group Room: ${groupId}`);
+  });
+
+
+  // Handle group chats
+  socket.on("sendGroupMessage", async (data) => {
+    try {
+      let { groupId, sender, message, file } = data;
+  
+      if (!groupId || !sender) {
+        console.error("Missing groupId or sender in group message:", data);
+        return;
+      }
+  
+      const newMessage = new Message({
+        sender,
+        group: groupId,
+        message: message || "",
+        file: file || null,
+        timestamp: new Date(),
+        status: "sent",
+      });
+  
+      await newMessage.save();
+  
+      console.log("Sending group message to all users in group:", newMessage);
+
+      //Send message to all users in the group
+      io.to(groupId).emit("receiveGroupMessage", newMessage);
+    } catch (error) {
+      console.error("Error sending group message:", error);
+    }
+  }); 
+});
 
 
 // Start Server

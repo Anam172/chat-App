@@ -8,6 +8,7 @@ import { FaPaperclip, FaTimes, FaPlus, FaCheck, FaCheckDouble } from "react-icon
 
 
 const socket = io("http://localhost:5000");
+window.socket = socket;
 
 const Chat = () => {
   const [user, setUser] = useState(null);
@@ -20,111 +21,160 @@ const Chat = () => {
   const [isTyping, setIsTyping] = useState(false);
   const fileInputRef = useRef(null);
   const typingTimeout = useRef(null);
+  const [usersStatus, setUsersStatus] = useState({});
+  const [groups, setGroups] = useState([]);
+  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [selectedGroupMembers, setSelectedGroupMembers] = useState([]);
 
-
-
-
+  
+  
   useEffect(() => {
     const storedUser = JSON.parse(localStorage.getItem("user"));
     const token = localStorage.getItem("token");
     if (!token) {
       console.error("No token found in localStorage");
     }
-
-
+  
     if (storedUser) {
       setUser(storedUser);
       socket.emit("userConnected", storedUser._id);
     }
-
+  
     const fetchUsers = async () => {
       try {
-        const [usersRes] = await Promise.all([
-          axios.get("http://localhost:5000/api/users", {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
-
+        const usersRes = await axios.get("http://localhost:5000/api/users", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+  
         let filteredUsers = usersRes.data.filter(
           (usr) => usr._id !== storedUser?._id
         );
-
+  
         setUsers([storedUser, ...filteredUsers]);
+
+         // Request user statuses after fetching users
+      socket.emit("requestUserStatus");
+      
       } catch (err) {
         console.error("Error fetching users:", err);
       }
     };
-
+  
     fetchUsers();
   }, []);
-
+  
   useEffect(() => {
-    if (!user || !selectedUser) return;
-    const token = localStorage.getItem("token");
-    if (!token) {
-      console.error("No token found, authentication required.");
-      return;
-    }
-    
-    axios.get(`http://localhost:5000/api/chat/${user._id}/${selectedUser._id}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    .then((res) => setMessages(res.data))
-    .catch((err) => console.error("Error fetching chat history:", err));
+    if (!selectedUser || !user) return;
+  
+    const fetchMessages = async () => {
+      const url = selectedUser.isGroup
+        ? `http://localhost:5000/api/groups/${selectedUser._id}/messages`
+        : `http://localhost:5000/api/chat/${user._id}/${selectedUser._id}`;
+  
+      try {
+        const response = await axios.get(url);
+        setMessages(response.data);
+        console.log("Messages Loaded:", response.data);
+      } catch (error) {
+        console.error("Error fetching messages:", error);
+      }
+    };
+  
+    fetchMessages();
   }, [selectedUser, user]);
   
   
   
+  const sendMessage = useCallback(async (e) => {
+    e?.preventDefault();
+    if (!message.trim() && !selectedFile) return;
+    if (!user || !selectedUser) return;
+  
+    console.log("Sending Message:", { message, selectedFile, user, selectedUser });
+  
+    const token = localStorage.getItem("token");
+  
+    const tempMessage = {
+      _id: Date.now().toString(),
+      sender: user._id,
+      receiver: selectedUser.isGroup ? null : selectedUser._id,
+      group: selectedUser.isGroup ? selectedUser._id : null,
+      message: message.trim(),
+      file: selectedFile || null,
+      timestamp: new Date(),
+      status: "sent",
+    };
+  
+    setMessages((prev) => [...prev, tempMessage]); 
+  
+    if (selectedUser.isGroup) {
+      socket.emit("sendGroupMessage", tempMessage);
+    } else {
+      socket.emit("sendMessage", tempMessage);
+    }
+  
+    try {
+      let response;
+  
+      if (!selectedUser.isGroup) {
+        response = await axios.post(
+          "http://localhost:5000/api/chat/send",
+          { sender: user._id, receiver: selectedUser._id, message: message.trim(), file: selectedFile },
+          { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }
+        );
+      } else {
+        response = await axios.post(
+          `http://localhost:5000/api/groups/${selectedUser._id}/send`,
+          { sender: user._id, groupId: selectedUser._id, message: message.trim(), file: selectedFile },
+          { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }
+        );
+      }
+  
+      console.log("Message Sent Successfully:", response.data);
+  
+      setMessages((prev) =>
+        prev.map((msg) => (msg._id === tempMessage._id ? response.data : msg))
+      );
+  
+    } catch (err) {
+      console.error("Error sending message:", err);
+    }
+  
+    setMessage("");
+    setSelectedFile(null);
+  }, [message, selectedFile, user, selectedUser]);
+  
+
+  
+  
+  
   useEffect(() => {
-    socket.on("receiveMessage", (newMessage) => {
+    if (selectedUser && selectedUser.isGroup) {
+      setMessages([]); 
+    }
+  }, [selectedUser]);
+  
+  useEffect(() => {
+    const handleNewMessage = (newMessage) => {
       console.log("Received Message:", newMessage);
-      setMessages((prev) => [...prev, newMessage]);
-    });
+      
+      setMessages((prev) => {
+        const isDuplicate = prev.some((msg) => msg._id === newMessage._id);
+        return isDuplicate ? prev : [...prev, newMessage];
+      });
+    };
+  
+    socket.off("receiveMessage");
+    socket.on("receiveMessage", handleNewMessage);
   
     return () => {
-      socket.off("receiveMessage");
+      socket.off("receiveMessage", handleNewMessage);
     };
   }, []);
   
   
-
-  const sendMessage = useCallback(async () => {
-    if (!message.trim() && !selectedFile) return;
   
-    console.log("Sending Message:", { message, selectedFile });
-  
-    const token = localStorage.getItem("token");
-    const formData = new FormData();
-    formData.append("sender", user._id);
-    formData.append("receiver", selectedUser._id);
-    if (selectedFile) {
-      formData.append("file", selectedFile);
-    }
-    formData.append("message", message.trim());
-    formData.append("timestamp", new Date().toISOString());
-  
-    try {
-      const response = await axios.post("http://localhost:5000/api/chat/send", formData, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "multipart/form-data",
-        },
-      });
-  
-      console.log("Message Sent:", response.data);
-      
-      socket.emit("sendMessage", response.data);
-      setMessages((prev) => [...prev, response.data]);
-      setMessage("");
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
-      setSelectedFile(null);
-      
-    } catch (err) {
-      console.error("Error sending message:", err);
-    }
-  }, [message, selectedFile, user, selectedUser]);
   
   useEffect(() => {
     socket.on("userTyping", ({ senderId }) => {
@@ -167,8 +217,6 @@ const Chat = () => {
   }, [user, selectedUser]);
   
   
-  
-  
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     setSelectedFile(file);
@@ -181,6 +229,7 @@ const Chat = () => {
     }
   };
   
+  
   useEffect(() => {
     if (!selectedUser || !user) return;
   
@@ -192,36 +241,42 @@ const Chat = () => {
       .then((res) => {
         setMessages(res.data);
   
-        // Mark unread messages as read
-        res.data.forEach((msg) => {
-          if (msg.receiver === user._id && msg.status !== "read") {
-            socket.emit("messageRead", { messageId: msg._id, senderId: msg.sender });
+        // Emit messageRead event for unread messages
+        const unreadMessages = res.data.filter(
+          (msg) => msg.receiver === user._id && msg.status !== "read"
+        );
   
-            axios.post(
-              "http://localhost:5000/api/chat/markAsRead",
-              { messageId: msg._id },
-              { headers: { Authorization: `Bearer ${token}` } }
-            );
-          }
-        });
+        if (unreadMessages.length > 0) {
+          unreadMessages.forEach((msg) => {
+            socket.emit("messageRead", { messageId: msg._id, senderId: msg.sender });
+          });
+  
+          // Send one request to mark all as read
+          axios.post(
+            "http://localhost:5000/api/chat/markAsRead",
+            { messageId: unreadMessages.map((msg) => msg._id) },
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+        }
       })
       .catch((err) => console.error("Error fetching chat history:", err));
   }, [selectedUser, user]);
   
 
   useEffect(() => {
-    socket.on("updateMessageStatus", ({ messageId, status }) => {
-      setMessages((prevMessages) =>
-        prevMessages.map((msg) =>
-          msg._id === messageId ? { ...msg, status } : msg
-        )
-      );
-    });
-  
-    return () => {
-      socket.off("updateMessageStatus");
-    };
-  }, []);
+  socket.on("updateMessageStatus", ({ messageId, status }) => {
+    setMessages((prevMessages) =>
+      prevMessages.map((msg) =>
+        msg._id === messageId ? { ...msg, status } : msg
+      )
+    );
+  });
+
+  return () => {
+    socket.off("updateMessageStatus");
+  };
+}, [messages]); 
+
   
 
 // Group messages by day
@@ -243,32 +298,257 @@ const groupedMessages = useMemo(() => {
   }, {});
 }, [messages]);
 
+useEffect(() => {
+  socket.on("update-user-status", (allUsers) => {
+    const updatedStatus = {};
+    allUsers.forEach((usr) => {
+      updatedStatus[usr._id] = {
+        online: usr.isOnline,
+        lastSeen: usr.lastSeen,
+      };
+    });
+    setUsersStatus(updatedStatus);
+  });
 
-  return (
+  socket.emit("requestUserStatus"); 
+
+  return () => {
+    socket.off("update-user-status");
+  };
+}, []);
+
+
+useEffect(() => {
+  const handleBeforeUnload = () => {
+    if (user) {
+      socket.emit("userDisconnected", user._id);
+    }
+  };
+
+  window.addEventListener("beforeunload", handleBeforeUnload);
+
+  return () => {
+    window.removeEventListener("beforeunload", handleBeforeUnload);
+  };
+}, [user]);
+
+
+const getUserStatus = (userId) => {
+  if (!usersStatus[userId]) return "Offline";
+
+  return usersStatus[userId].online
+    ? "Online"
+    : usersStatus[userId].lastSeen
+    ? `Last seen at ${moment(usersStatus[userId].lastSeen).format("hh:mm A")}`
+    : "Offline";
+};
+
+
+
+// Fetching group messages
+
+useEffect(() => {
+  if (!user) return;
+
+  const fetchGroups = async () => {
+    try {
+      const response = await axios.get(`http://localhost:5000/api/groups/${user._id}`);
+      setGroups(response.data);
+    } catch (error) {
+      console.error("Error fetching groups:", error);
+    }
+  };
+
+  fetchGroups();
+}, [user]);
+
+
+// Join Group Rooms 
+useEffect(() => {
+  if (!user) return;
+
+  groups.forEach((group) => {
+    socket.emit("joinGroup", group._id);
+  });
+}, [user, groups]);
+
+useEffect(() => {
+  socket.on("groupCreated", (newGroup) => {
+    setGroups((prevGroups) => [...prevGroups, newGroup]); 
+    socket.emit("joinGroup", newGroup._id); 
+  });
+
+  return () => {
+    socket.off("groupCreated");
+  };
+}, []);
+
+
+//Handle for Group Messages
+useEffect(() => {
+  socket.on("receiveGroupMessage", (newMessage) => {
+    console.log("New Group Message:", newMessage);
+    setMessages((prevMessages) => [...prevMessages, newMessage]); 
+  });
+
+  return () => {
+    socket.off("receiveGroupMessage");
+  };
+}, []);
+
+
+
+
+const createGroup = async () => {
+  if (!groupName || selectedGroupMembers.length < 2) {
+    alert("A group must have a name and at least two members.");
+    return;
+  }
+
+  try {
+    const token = localStorage.getItem("token");
+    const response = await axios.post(
+      "http://localhost:5000/api/groups",
+      { name: groupName, members: selectedGroupMembers },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    setShowCreateGroupModal(false);
+    setGroupName("");
+    setSelectedGroupMembers([]);
+
+    // Emit an event to update UI for all users
+    socket.emit("groupCreated", response.data);
+
+  } catch (error) {
+    console.error("Error creating group:", error);
+  }
+};
+
+ return (
     <div className="flex h-screen bg-gray-100">
       {/* Left Sidebar - Users List */}
       <div className="w-1/4 bg-white p-4 shadow-lg relative">
         <h3 className="text-xl font-bold mb-4">Users</h3>
+          <ul className="space-y-2">
+              {users.map((usr, index) => (
+                <li
+                  key={usr._id || index}
+                  className={`flex items-center gap-3 p-2 rounded-md cursor-pointer transition duration-200 ${
+                    selectedUser?._id === usr._id ? "bg-gray-100" : "hover:bg-gray-200"
+                  }`}
+                  onClick={() => setSelectedUser(usr)}
+                >
+                  {/* User Avatar */}
+                  <div className="relative">
+                    <img
+                      src={usr.avatar || "/avatars/defaultUser.jpg"}
+                      alt={usr.name}
+                      className="w-10 h-10 rounded-full border-2 border-zinc-600"
+                    />
+                    {/* Online/Offline Indicator */}
+                    <span
+                      className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 ${
+                        usersStatus[usr._id]?.online
+                          ? "bg-green-500 border-white"
+                          : "bg-white border-gray-400"
+                      }`}
+                    ></span>
+                  </div>
+
+                  {/* Username & Status */}
+                  <div>
+                    <span className="text-lg">{usr.name} {usr._id === user?._id ? "(You)" : ""}</span>
+                  </div>
+                </li>
+              ))}
+           </ul>
+
+        <h3 className="text-xl font-bold mb-4">Groups</h3>
         <ul className="space-y-2">
-          {users.map((usr, index) => (
-            <li
-              key={usr._id || index}
-              className={`flex items-center gap-3 p-2 rounded-md cursor-pointer transition duration-200 ${
-                selectedUser?._id === usr._id ? "bg-gray-100" : "hover:bg-gray-200"
-              }`}
-              onClick={() => setSelectedUser(usr)}
-            >
-              <img
-                src={usr.avatar || "/avatars/defaultUser.jpg"}
-                alt={usr.name}
-                className="w-10 h-10 rounded-full border-2 border-zinc-600"
-              />
-              <span className="text-lg">
-                {usr.name} {usr._id === user?._id ? "(You)" : ""}
-              </span>
-            </li>
+          {groups.map((group) => (
+           <li
+           key={group._id}
+           className={`flex items-center gap-3 p-2 rounded-md cursor-pointer transition duration-200 ${
+             selectedUser?._id === group._id ? "bg-gray-100" : "hover:bg-gray-200"
+           }`}
+           onClick={() => setSelectedUser({ ...group, isGroup: true })}
+         >
+           {/* Group Avatars */}
+           <div className="relative w-10 h-10">
+             {group.members.slice(0, 3).map((member, index) => (
+               <img
+                 key={index}
+                 src={member.avatar || "/avatars/defaultUser.jpg"}
+                 alt={member.name}
+                 className="absolute w-6 h-6 rounded-full border-2 border-white"
+                 style={{ left: index * 8, top: index * 8 }} // Stacks avatars
+               />
+             ))}
+           </div>
+           
+           <div>
+             <span className="text-lg font-semibold">{group.name}</span>
+             <p className="text-xs text-gray-500">{group.members.map(m => m.name).join(", ")}</p>
+           </div>
+         </li>
+         
           ))}
+          <button
+          onClick={() => setShowCreateGroupModal(true)}
+          className="p-2 bg-zinc-500 text-white rounded-lg w-full text-center"
+        >
+          + Create Group
+        </button>
+
         </ul>
+        
+        {showCreateGroupModal && (
+          <div className=" inset-0 flex justify-center items-center bg-transparent bg-opacity-50 z-50">
+            <div className="bg-gray-50 p-6 rounded-lg shadow-lg w-96">
+              <h2 className="text-xl font-bold mb-2">Create Group</h2>
+              <input
+                type="text"
+                placeholder="Group Name"
+                value={groupName}
+                onChange={(e) => setGroupName(e.target.value)}
+                className="w-full p-2 border rounded-lg mb-2"
+              />
+              <div className="w-full p-2 border rounded-lg max-h-40 overflow-auto">
+          {users.map((usr) => (
+            <label key={usr._id} className="flex items-center space-x-2 p-1 cursor-pointer">
+              <input
+                type="checkbox"
+                value={usr._id}
+                className="accent-purple-500"
+                checked={selectedGroupMembers.includes(usr._id)}
+                onChange={(e) => {
+                  const userId = e.target.value;
+                  setSelectedGroupMembers((prev) =>
+                    prev.includes(userId)
+                      ? prev.filter((id) => id !== userId) // Remove if already selected
+                      : [...prev, userId] // Add if not selected
+                  );
+                }}
+              />
+              <span>{usr.name}</span>
+            </label>
+          ))}
+        </div>
+
+            <div className="flex justify-between mt-3">
+                    <button onClick={createGroup} className="bg-purple-300 text-white px-3 py-2 rounded-lg">
+                      Create
+                    </button>
+                    <button onClick={() => setShowCreateGroupModal(false)} className="bg-blue-200 text-white px-3 py-2 rounded-lg">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+
 
         {/* Logged-in User at Bottom Left */}
         {user && (
@@ -287,14 +567,47 @@ const groupedMessages = useMemo(() => {
 <div className="flex-1 flex flex-col justify-between p-4 bg-white shadow-lg relative">
   {selectedUser ? (
     <>
+    
       <h2 className="text-2xl font-semibold border-b pb-2 mb-2 flex items-center gap-3">
-        <img
-          src={selectedUser.avatar || "/avatars/defaultUser.jpg"}
-          alt={selectedUser.name}
-          className="w-10 h-10 rounded-full border-2 border-zinc-400"
-        />
-        Chat with {selectedUser.name}
-      </h2>
+        {/* Group or User Avatar */}
+          {selectedUser.isGroup ? (
+            selectedUser.avatar ? (
+              <img
+                src={selectedUser.avatar}
+                alt={selectedUser.name}
+                className="w-12 h-12 rounded-full border-2 border-white"
+              />
+            ) : (
+              <div className="relative w-12 h-12">
+                {selectedUser.members.slice(0, 3).map((member, index) => (
+                  <img
+                    key={index}
+                    src={member.avatar || "/avatars/defaultUser.jpg"}
+                    alt={member.name}
+                    className="absolute w-6 h-6 rounded-full border-2 border-white"
+                    style={{ left: index * 10, top: index * 10 }}
+                  />
+                ))}
+              </div>
+            )
+          ) : (
+            <img
+              src={selectedUser.avatar || "/avatars/defaultUser.jpg"}
+              alt={selectedUser.name}
+              className="w-10 h-10 rounded-full border-2 border-zinc-400"
+            />
+          )}
+
+
+        <div className="flex flex-col">
+        <h2 className="text-xl font-bold">{selectedUser.name}</h2>
+          {selectedUser.isGroup ? (
+            <p className="text-sm text-gray-500">Members: {selectedUser.members.map(m => m.name).join(", ")}</p>
+          ) : (
+            <span className="text-sm text-gray-500">{getUserStatus(selectedUser._id)}</span>
+          )}
+       </div>
+       </h2>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto bg-gray-100 p-3 rounded-lg flex flex-col">
@@ -310,7 +623,9 @@ const groupedMessages = useMemo(() => {
                     : "bg-neutral-300 text-black mr-auto"
                 }`}
               >
-                <strong>{msg.sender === user._id ? "You" : selectedUser.name}</strong>
+                <strong>
+                  {msg.sender === user._id ? "You" : msg.sender.name}
+                </strong>
                 <br />
                 {msg.message}
                 {msg.file && (
@@ -352,8 +667,6 @@ const groupedMessages = useMemo(() => {
               </div>
             ))}
                
-          {/* Typing Indicator */}
-          {isTyping && <p className="text-gray-500 italic mt-2">Typing...</p>}
             </div>
           ))}
 
@@ -380,7 +693,7 @@ const groupedMessages = useMemo(() => {
 
         {/* File Preview */}
         {selectedFile && (
-          <div className="absolute bottom-14 left-10 bg-gray-200 p-2 rounded-lg flex items-center gap-2 shadow-md w-28">
+          <div className="absolute bottom-14 left-10 bg-gray-200 p-2 rounded-lg flex items-center gap-2 shadow-md w-36">
             {selectedFile.type.startsWith("image/") ? (
               <img src={URL.createObjectURL(selectedFile)} alt="Preview" className="w-10 h-10 rounded-md" />
             ) : (
@@ -408,7 +721,14 @@ const groupedMessages = useMemo(() => {
           handleTyping();
           }
          }
-          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+         onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault(); 
+            sendMessage();
+          }
+          {/* Typing Indicator */}
+          {isTyping && <p className="text-gray-500 italic mt-2">Typing...</p>}
+        }}
           className="flex-1 p-2 border rounded-lg"
           placeholder="Type a message..."
         />
@@ -428,9 +748,7 @@ const groupedMessages = useMemo(() => {
     </div>
   )}
 </div>
-
-        
-    </div>
+  </div>
   );
 };
 

@@ -4,10 +4,12 @@ const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
-    password: { type: String }, // Only for manual login
-    googleId: { type: String }, // Only for Google login
-    picture: { type: String }, // Profile picture
-    avatar: { type: String }, // Store avatar URL or path
+    password: { type: String }, 
+    googleId: { type: String }, 
+    picture: { type: String },
+    avatar: { type: String }, 
+    isOnline: { type: Boolean, default: false },
+    lastSeen: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -50,10 +50,16 @@ router.post("/send", authMiddleware, upload.single("file"), async (req, res) => 
 });
 
 // Mark a Message as Read
-// Mark message as read when the receiver views it
-router.post("/markAsRead", authMiddleware, async (req, res) => {
+router.post("/markAsRead", async (req, res) => {
+  console.log("Received `markAsRead` request:", req.body);
+
   try {
     const { messageId } = req.body;
+
+    if (!messageId) {
+      console.error("No messageId provided");
+      return res.status(400).json({ message: "Message ID is required" });
+    }
 
     const message = await Message.findByIdAndUpdate(
       messageId,
@@ -61,11 +67,12 @@ router.post("/markAsRead", authMiddleware, async (req, res) => {
       { new: true }
     );
 
-    if (!message) return res.status(404).json({ message: "Message not found" });
+    if (!message) {
+      console.error("Message not found:", messageId);
+      return res.status(404).json({ message: "Message not found" });
+    }
 
-    // Notify sender that the message has been read
-    io.emit("updateMessageStatus", { messageId: message._id, status: "read" });
-
+    console.log("Message updated to read:", message);
     res.json({ success: true, message });
   } catch (error) {
     console.error("Error updating message status:", error);
@@ -93,8 +100,8 @@ router.get("/:senderId/:receiverId", authMiddleware, async (req, res) => {
     // Update unread messages to "delivered"
     await Message.updateMany(
       {
-        sender: receiverId,  // Messages sent by the receiver (which the sender now sees)
-        receiver: senderId,  // The current user who is viewing them
+        sender: receiverId,  
+        receiver: senderId,  
         status: "sent",
       },
       { $set: { status: "delivered" } }
